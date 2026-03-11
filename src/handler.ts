@@ -554,11 +554,37 @@ async function handleStream(res: Response, cursorReq: CursorChatRequest, body: A
         }
 
         // 流完成后，处理完整响应
-        // ★ 截断检测：代码块/XML 未闭合时，返回 max_tokens 让 Claude Code 自动继续
-        // 避免用户每次都要手动点击"继续"
+        // ★ 内部截断续写：如果模型输出过长被截断（常见于写大文件），Proxy 内部分段续写，然后拼接成完整响应
+        // 这样可以确保工具调用（如 Write）不会横跨两次 API 响应而退化为纯文本
+        const MAX_AUTO_CONTINUE = 4;
+        let continueCount = 0;
+        
+        while (hasTools && isTruncated(fullResponse) && continueCount < MAX_AUTO_CONTINUE) {
+            continueCount++;
+            console.log(`[Handler] ⚠️ 内部检测到截断 (${fullResponse.length} chars)，Proxy 将隐式请求无缝续写 (第${continueCount}次)...`);
+            
+            // 构造续写请求：让 assistant 成为最后一条消息，模型会隐式无缝衔接
+            activeCursorReq = {
+                ...activeCursorReq,
+                messages: [...activeCursorReq.messages, {
+                    parts: [{ type: 'text', text: fullResponse }],
+                    id: uuidv4(),
+                    role: 'assistant',
+                }],
+            };
+            
+            let continuationResponse = '';
+            await sendCursorRequest(activeCursorReq, (event: CursorSSEEvent) => {
+                if (event.type === 'text-delta' && event.delta) {
+                    continuationResponse += event.delta;
+                }
+            });
+            fullResponse += continuationResponse;
+        }
+
         let stopReason = (hasTools && isTruncated(fullResponse)) ? 'max_tokens' : 'end_turn';
         if (stopReason === 'max_tokens') {
-            console.log(`[Handler] ⚠️ 检测到截断响应 (${fullResponse.length} chars)，设置 stop_reason=max_tokens`);
+            console.log(`[Handler] ⚠️ ${MAX_AUTO_CONTINUE}次隐式续写后仍受限于截断 (${fullResponse.length} chars)，设置 stop_reason=max_tokens`);
         }
 
         if (hasTools) {
