@@ -33,16 +33,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd --system --gid 1001 nodejs \
     && useradd --system --uid 1001 --gid nodejs cursor
 
-# 复制包配置并安装依赖（编译原生模块）
+# 复制包配置并安装依赖（包含 devDependencies 用于 TypeScript 编译）
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev \
-    && npm cache clean --force
+RUN npm ci
 
-# 安装 TypeScript 编译器并编译
+# 复制 TypeScript 配置和源代码，编译
 COPY tsconfig.json ./
 COPY src ./src
-RUN npx tsc \
-    && rm -rf src tsconfig.json
+RUN npm run build \
+    && rm -rf src tsconfig.json node_modules \
+    && npm ci --omit=dev \
+    && npm cache clean --force
 
 # 从 vue-builder 阶段拷贝 Vue UI 构建产物
 COPY --from=vue-builder --chown=cursor:nodejs /app/vue-ui/../public/vue ./public/vue
