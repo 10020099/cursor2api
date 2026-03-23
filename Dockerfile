@@ -1,19 +1,31 @@
-# ==== Stage 1: 构建阶段 (Builder) ====
+# ==== Stage 1: 前端构建阶段 (Vue UI Builder) ====
+FROM node:22-alpine AS vue-builder
+
+WORKDIR /app/vue-ui
+
+# 复制 Vue UI 依赖文件并安装
+COPY vue-ui/package.json vue-ui/package-lock.json ./
+RUN npm ci
+
+# 复制 Vue UI 源代码并构建
+COPY vue-ui/ ./
+RUN npm run build
+
+# ==== Stage 2: 后端构建阶段 (Backend Builder) ====
 FROM node:22-alpine AS builder
 
-# 设置工作目录
 WORKDIR /app
 
-# 仅拷贝包配置并安装所有依赖项（利用 Docker 缓存层）
+# 复制包配置并安装所有依赖项（利用 Docker 缓存层）
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# 拷贝项目源代码并执行 TypeScript 编译
+# 复制项目源代码并执行 TypeScript 编译
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-# ==== Stage 2: 生产运行阶段 (Runner) ====
+# ==== Stage 3: 生产运行阶段 (Runner) ====
 FROM node:22-alpine AS runner
 
 WORKDIR /app
@@ -28,13 +40,16 @@ ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 cursor
 
-# 拷贝包配置并仅安装生产环境依赖（极大减小镜像体积）
+# 复制包配置并仅安装生产环境依赖（极大减小镜像体积）
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev \
     && npm cache clean --force
 
 # 从 builder 阶段拷贝编译后的产物
 COPY --from=builder --chown=cursor:nodejs /app/dist ./dist
+
+# 从 vue-builder 阶段拷贝 Vue UI 构建产物
+COPY --from=vue-builder --chown=cursor:nodejs /app/vue-ui/../public/vue ./public/vue
 
 # 拷贝前端静态资源（日志查看器 Web UI）
 COPY --chown=cursor:nodejs public ./public

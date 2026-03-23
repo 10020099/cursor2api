@@ -10,17 +10,24 @@ http.log
 npm-debug.log
 .DS_Store
 
+# Vue UI 构建产物（构建时自动生成）
+vue-ui/node_modules
+public/vue
+
 # 构建中间产物和测试文件
 deploy.sh
 *.zip
 *.tar.gz
 test*.txt
+test/
 
 # Docker 自身配置（避免递归）
 Dockerfile
 docker-compose.yml
 .dockerignore
+.github
 
 # 文档
 README.md
 LICENSE
+CHANGELOG.md
