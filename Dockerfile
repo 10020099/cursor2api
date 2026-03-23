@@ -11,42 +11,38 @@ RUN npm ci
 COPY vue-ui/ ./
 RUN npm run build
 
-# ==== Stage 2: 后端构建阶段 (Backend Builder) ====
-FROM node:22-alpine AS builder
-
-WORKDIR /app
-
-# 复制包配置并安装所有依赖项（利用 Docker 缓存层）
-COPY package.json package-lock.json ./
-RUN npm ci
-
-# 复制项目源代码并执行 TypeScript 编译
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build
-
-# ==== Stage 3: 生产运行阶段 (Runner) ====
-FROM node:22-alpine AS runner
+# ==== Stage 2: 生产运行阶段 (Runner) ====
+# 使用 Debian slim 镜像以支持 better-sqlite3 等原生模块
+FROM node:22-slim AS runner
 
 WORKDIR /app
 
 # 设置为生产环境
 ENV NODE_ENV=production
 
-# 增大 Node.js 堆内存上限，防止日志文件过大时加载 OOM（tesseract.js / js-tiktoken 初始化也有一定内存需求）
+# 增大 Node.js 堆内存上限，防止日志文件过大时加载 OOM
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 
-# 出于安全考虑，避免使用 root 用户运行服务
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 cursor
+# 安装编译工具 + 运行时依赖 + 创建用户（一步完成减少层数）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    make \
+    g++ \
+    libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 1001 nodejs \
+    && useradd --system --uid 1001 --gid nodejs cursor
 
-# 复制包配置并仅安装生产环境依赖（极大减小镜像体积）
+# 复制包配置并安装依赖（编译原生模块）
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev \
     && npm cache clean --force
 
-# 从 builder 阶段拷贝编译后的产物
-COPY --from=builder --chown=cursor:nodejs /app/dist ./dist
+# 安装 TypeScript 编译器并编译
+COPY tsconfig.json ./
+COPY src ./src
+RUN npx tsc \
+    && rm -rf src tsconfig.json
 
 # 从 vue-builder 阶段拷贝 Vue UI 构建产物
 COPY --from=vue-builder --chown=cursor:nodejs /app/vue-ui/../public/vue ./public/vue
@@ -56,9 +52,6 @@ COPY --chown=cursor:nodejs public ./public
 
 # 创建日志目录并授权
 RUN mkdir -p /app/logs && chown cursor:nodejs /app/logs
-
-# 注意：config.yaml 不打包进镜像，通过 docker-compose volumes 挂载
-# 如果未挂载，服务会使用内置默认值 + 环境变量
 
 # 切换到非 root 用户
 USER cursor
